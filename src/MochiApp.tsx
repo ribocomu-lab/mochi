@@ -1600,7 +1600,7 @@ function makePowderSprite() {
 async function composeResult(shot: string, anko: AnkoStyle, bites: number) {
   const font = '"Pretendard Variable", Pretendard, Inter, system-ui, sans-serif'
   try {
-    await Promise.all([document.fonts.load(`200 120px ${font}`), document.fonts.load(`400 30px ${font}`)])
+    await Promise.all([document.fonts.load(`700 96px ${font}`), document.fonts.load(`400 30px ${font}`)])
   } catch {
     /* 시스템 폰트로 진행 */
   }
@@ -1637,8 +1637,8 @@ async function composeResult(shot: string, anko: AnkoStyle, bites: number) {
   ctx.fillRect(80, H - 300, W - 160, 2)
   ctx.textAlign = 'left'
   ctx.fillStyle = '#111111'
-  ctx.font = `200 120px ${font}`
-  ctx.fillText('完食', 72, H - 140)
+  ctx.font = `700 96px ${font}`
+  ctx.fillText('잘 먹었습니다!', 74, H - 140)
   ctx.font = `300 32px ${font}`
   ctx.fillStyle = '#8a8a8a'
   ctx.fillText(`${anko.label} · ${bites} bites`, 80, H - 86)
@@ -2296,9 +2296,8 @@ export default function MochiApp() {
 
       {/* 헤더 */}
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 pt-[max(env(safe-area-inset-top),18px)]">
-        <div className="flex items-center gap-3 text-[11px] tracking-[0.12em] text-mute">
+        <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-mute">
           <span className="font-bold tabular-nums text-ink">{String(step + 1).padStart(2, '0')}</span>
-          <span className="h-px w-6 bg-line" />
           <span>{STEPS[step]}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -2536,8 +2535,8 @@ export default function MochiApp() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.5 }}
           >
-            <div className="flex items-baseline gap-4">
-              <h1 className="text-5xl font-bold tracking-tight">完食</h1>
+            <div className="flex flex-col items-center gap-2">
+              <h1 className="text-[34px] font-bold tracking-[-0.03em]">잘 먹었습니다!</h1>
               <span className="text-[12px] tracking-[0.2em] text-mute">{state.bites} BITES</span>
             </div>
             <img
