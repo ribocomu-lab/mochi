@@ -512,7 +512,7 @@ type Engine = {
     uBiteCount: { value: number }
     uWorldToMochi: { value: THREE.Matrix4 }
   }
-  bites: { x: number; y: number; z: number; r: number }[]
+  bites: { x: number; y: number; z: number; r: number; skin: boolean }[] // skin: 떡피만 먹은 자국
   samples: Float32Array
   alive: Uint8Array
   aliveCount: number
@@ -867,6 +867,7 @@ uniform vec3 uInterior;
 uniform float uGrain;
 uniform float uGrainScale;
 uniform vec3 uSSS;
+uniform float uSkin;
 varying vec3 vMochiWorld;
 bool mochiBitten(vec3 p) {
   for (int i = 0; i < ${BITE_TEX}; i++) {
@@ -876,13 +877,16 @@ bool mochiBitten(vec3 p) {
     float d = length(v);
     if (d > b.w) continue;
     vec4 o = texelFetch(uBites, ivec2(i, 1), 0);
+    // 떡피만 먹은 자국(o.w < 0)은 속(앙금/피사체)에는 구멍을 내지 않는다
+    if (o.w < 0.0 && uSkin < 0.5) continue;
+    float seed = abs(o.w);
     vec3 ax = normalize(o.xyz);
     vec3 t1 = normalize(cross(ax, abs(ax.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
     vec3 t2 = cross(ax, t1);
     float th = atan(dot(v, t2), dot(v, t1));
-    float teeth = 8.0 + mod(floor(o.w), 3.0);
+    float teeth = 8.0 + mod(floor(seed), 3.0);
     // 이빨 자국: 작은 원호가 이어진 울퉁불퉁한 가장자리
-    float sc = 1.0 - 0.1 * (1.0 - sqrt(abs(sin(th * teeth * 0.5 + o.w))));
+    float sc = 1.0 - 0.1 * (1.0 - sqrt(abs(sin(th * teeth * 0.5 + seed))));
     if (d < b.w * sc) return true;
   }
   return false;
@@ -894,18 +898,20 @@ type BiteLocal = {
   uGrain: { value: number }
   uGrainScale: { value: number }
   uSSS: { value: THREE.Color }
+  uSkin: { value: number }
 }
 
 function biteMaterial<T extends THREE.MeshStandardMaterial>(
   mat: T,
   shared: Engine['uniforms'],
-  opts: { interior: string; grain: number; grainScale: number; sss?: string; sssAmt?: number },
+  opts: { interior: string; grain: number; grainScale: number; sss?: string; sssAmt?: number; skin?: boolean },
 ) {
   const local: BiteLocal = {
     uInterior: { value: new THREE.Color(opts.interior) },
     uGrain: { value: opts.grain },
     uGrainScale: { value: opts.grainScale },
     uSSS: { value: new THREE.Color(opts.sss ?? '#000000').multiplyScalar(opts.sssAmt ?? 0) },
+    uSkin: { value: opts.skin ? 1 : 0 },
   }
   mat.userData.local = local
   mat.onBeforeCompile = (sh) => {
@@ -958,7 +964,9 @@ const ANKO_STYLE: Record<Anko, AnkoStyle> = {
 
 const NRA = 24 // 앙금 쿠션 링 수
 const NSA = 96 // 앙금 쿠션 분할 수
-const ROUND_R = 0.56 // 동그랗게 빚었을 때 피사체 원의 반지름
+const ROUND_R = 0.6 // 동그랗게 빚었을 때 피사체 원의 반지름
+const ROUND_T = 0.8 // 동그랗게 빚었을 때 앙금 쿠션의 앞뒤 두께 (반죽 안쪽을 꽉 채움)
+const ROUND_SX = 1.12 // 모찌가 옆으로 더 넓으니 가로로 살짝 더 채움
 const PHOTO_GAP = 0.022 // 앙금 표면과 사진 사이 간격 (깊이 충돌 방지)
 
 /** 3D 각도(y 위)에서의 피사체 외곽선 반지름 — radii는 이미지 좌표계(y 아래) 각도 */
@@ -1059,9 +1067,10 @@ function stepCore(e: Engine, dt: number, coated: boolean, ce: number) {
   }
 
   const grow = 0.9 + 0.1 * ce
-  const T = lerp(0.15, 0.42, k) * ce // 쿠션 두께 → 둥글어질수록 볼록한 렌즈
+  const T = lerp(0.15, ROUND_T, k) * ce // 쿠션 두께 → 둥글어질수록 볼록한 렌즈
+  const sx = lerp(1, ROUND_SX, k)
   const pexp = lerp(4, 2, k) // 납작한 면 → 돔
-  const ankoR = (th: number) => lerp(silR(s, th) + COAT * coatLump(th), ROUND_R + COAT + 0.03, k) * grow
+  const ankoR = (th: number) => lerp(silR(s, th) + COAT * coatLump(th), ROUND_R + COAT + 0.02, k) * grow
   const frontZ = (r: number, th: number) => {
     const ta = Math.min(1, r / ankoR(th))
     return T * Math.sqrt(Math.max(0, 1 - Math.pow(ta, pexp)))
@@ -1073,7 +1082,7 @@ function stepCore(e: Engine, dt: number, coated: boolean, ce: number) {
     for (let i = 0; i < P.length / 3; i++) {
       const th = P[i * 3 + 1]
       const r = P[i * 3] * ankoR(th)
-      let x = Math.cos(th) * r
+      let x = Math.cos(th) * r * sx
       let y = Math.sin(th) * r
       let z = P[i * 3 + 2] * frontZ(r, th)
       const w = dragW(x, y, z)
@@ -1099,7 +1108,7 @@ function stepCore(e: Engine, dt: number, coated: boolean, ce: number) {
     const xn = r0 / Math.max(1e-3, silR(s, th))
     const fe = xn < 1 ? Math.sin((xn * Math.PI) / 2) * 0.65 + xn * 0.35 : 1 + (xn - 1) * 0.7
     const r = lerp(r0, ROUND_R * fe * grow, k)
-    let x = Math.cos(th) * r
+    let x = Math.cos(th) * r * sx
     let y = Math.sin(th) * r
     let z = coated ? frontZ(r, th) + PHOTO_GAP : 0
     const w = dragW(x, y, z)
@@ -1141,7 +1150,7 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
           side: THREE.FrontSide,
         }),
         engine.uniforms,
-        { interior: '#d9cfbf', grain: 0.05, grainScale: 160, sss: '#fff1e2', sssAmt: 0.3 },
+        { interior: '#d9cfbf', grain: 0.05, grainScale: 160, sss: '#fff1e2', sssAmt: 0.3, skin: true },
       ),
     [engine],
   )
@@ -1161,6 +1170,7 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
         interior: '#e6ddd0',
         grain: 0.04,
         grainScale: 120,
+        skin: true,
       }),
     [engine],
   )
@@ -1525,9 +1535,14 @@ const sfx = (() => {
       }
     },
     /** '쫩/우묵' */
-    bite() {
+    /** full: 속(앙금)까지 먹을 때 — 더 낮고 묵직한 '우물' */
+    bite(full = false) {
       const a = ctx()
       if (!a) return
+      if (full) {
+        squelch(a, 0.03, 0.32, 600, 180, 0.18, 5)
+        tone(a, 'sine', 140, 60, 0.02, 0.28, 0.16, 400)
+      }
       // 이빨이 들어가는 '쫍' → 떡이 늘어나며 떨어지는 '쮸웁' → 씹을 때 잔 기포
       squelch(a, 0, 0.07, 1800, 900, 0.2, 4)
       tone(a, 'sine', 210, 82, 0, 0.2, 0.22, 520)
@@ -1799,8 +1814,13 @@ export default function MochiApp() {
   }
 
   /* ── 3D 헬퍼 ────────────────────────────────────────────────── */
-  const isBitten = (p: THREE.Vector3) =>
-    engineRef.current.bites.some((b) => Math.hypot(p.x - b.x, p.y - b.y, p.z - b.z) < b.r * 0.9)
+  const isBitten = (p: THREE.Vector3, core: boolean) =>
+    engineRef.current.bites.some((b) => (!core || !b.skin) && Math.hypot(p.x - b.x, p.y - b.y, p.z - b.z) < b.r * 0.9)
+  /** 앙금 쿠션·단면·피사체 = 속. 나머지(반죽과 그 단면)는 떡피 */
+  const isCore = (o: THREE.Object3D) => {
+    const e = engineRef.current
+    return o === e.photo || o === e.slab || (!!e.slab && o.parent === e.slab)
+  }
 
   /** 화면 좌표 → 보이는(베어 먹히지 않은) 첫 표면 */
   const pick = (cx: number, cy: number, objs: (THREE.Object3D | null)[]) => {
@@ -1815,7 +1835,7 @@ export default function MochiApp() {
     for (const hit of raycaster.intersectObjects(list, false)) {
       if (hit.object === e.photo && e.subject && hit.uv && e.subject.alphaAt(hit.uv.x, hit.uv.y) < 128) continue
       const local = e.mochiG.worldToLocal(hit.point.clone())
-      if (!isBitten(local)) return { hit, local }
+      if (!isBitten(local, isCore(hit.object))) return { hit, local }
     }
     return null
   }
@@ -1860,7 +1880,7 @@ export default function MochiApp() {
   }
 
   /* ── 한 입 베어물기 (무제한 — 남은 양이 0이 될 때까지) ───────── */
-  const doBite = (local: THREE.Vector3, clientX: number, clientY: number) => {
+  const doBite = (local: THREE.Vector3, clientX: number, clientY: number, full: boolean) => {
     const e = engineRef.current
     if (!e.mochiG || e.bites.length >= BITE_TEX) return
     // 마지막 한 입 직전 모습을 결과 카드에 남김 (ReadPixels 비용 때문에 끝 무렵에만)
@@ -1872,13 +1892,18 @@ export default function MochiApp() {
     const data = e.uniforms.uBites.value.image.data as unknown as Float32Array
     const i = e.bites.length
     data.set([c.x, c.y, c.z, r], i * 4)
-    data.set([dir.x, dir.y, dir.z, Math.random() * 100], (BITE_TEX + i) * 4)
+    // 떡피를 먹은 자리는 다음 입에 속을 먹도록 seed 부호로 층을 구분 (셰이더 참고)
+    const seed = Math.random() * 100
+    data.set([dir.x, dir.y, dir.z, full ? seed : -1 - seed], (BITE_TEX + i) * 4)
     e.uniforms.uBites.value.needsUpdate = true
-    e.bites.push({ x: c.x, y: c.y, z: c.z, r })
+    e.bites.push({ x: c.x, y: c.y, z: c.z, r, skin: !full })
     e.uniforms.uBiteCount.value = e.bites.length
     const S = e.samples
+    const ar = ROUND_R + COAT + 0.02
     for (let k = 0; k < e.alive.length; k++) {
       if (!e.alive[k]) continue
+      // 떡피만 먹을 땐 동그랗게 빚어진 속(타원체) 안쪽 샘플은 남겨 둠
+      if (!full && (S[k * 3] / (ar * ROUND_SX)) ** 2 + ((S[k * 3 + 1] - CORE_Y) / ar) ** 2 + (S[k * 3 + 2] / ROUND_T) ** 2 < 1) continue
       if (Math.hypot(S[k * 3] - c.x, S[k * 3 + 1] - c.y, S[k * 3 + 2] - c.z) < r * 0.92) {
         e.alive[k] = 0
         e.aliveCount--
@@ -1886,7 +1911,7 @@ export default function MochiApp() {
     }
     const remaining = e.aliveCount / e.alive.length
 
-    sfx.bite()
+    sfx.bite(full)
     buzz([16, 30, 10])
     spawnCrumbs(clientX, clientY, 10)
     spawnPowder(clientX, clientY, 8, 80)
@@ -2011,7 +2036,7 @@ export default function MochiApp() {
       if (p) {
         if (modeRef.current === 'bite') {
           kind = 'bite'
-          doBite(p.local, x, y)
+          doBite(p.local, x, y, isCore(p.hit.object))
         } else {
           kind = 'squish'
           e.press = { active: true, gx: p.local.x, gy: p.local.y, gz: p.local.z, dx: 0, dy: 0, dz: 0, dragging: false, ...viewLocal() }
@@ -2251,7 +2276,7 @@ export default function MochiApp() {
       case 'shaping':
         return '반죽 위에서 원을 그리며 문질러 둥글게 빚어주세요'
       case 'play':
-        return state.mode === 'squish' ? '반죽을 누르거나 끌어당겨 늘려보세요' : '원하는 곳을 눌러 베어뭅니다 · 마지막 한 조각까지'
+        return state.mode === 'squish' ? '반죽을 누르거나 끌어당겨 늘려보세요' : '한 번은 떡피, 한 번 더 누르면 속까지 · 마지막 한 조각까지'
       default:
         return ' '
     }
