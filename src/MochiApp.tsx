@@ -163,7 +163,8 @@ const BOTTOM_Y = 0.8 // 중력으로 퍼진 바닥까지
 const FLOOR_Y = -BOTTOM_Y
 const CORE_Y = -0.02
 const COAT = 0.07 // 앙금 코팅 두께
-const RHO0 = 0.47 // 반죽 원판 중 처음부터 그릇처럼 바닥을 감싸고 있는 부분
+const GRAB_RHO = 0.42 // 이보다 바깥(앙금 발밑을 벗어난 시트)만 잡아 늘릴 수 있음
+const SHEET_R = 1.75 // 바닥에 평평하게 펴 둔 반죽 시트의 반지름
 const SIL_N = 72
 const BITE_R = 0.46
 const BITE_TEX = 512 // 저장 가능한 베어문 자국 수 (사실상 무제한)
@@ -476,14 +477,15 @@ type DoughSim = {
   n: number
   geo: THREE.BufferGeometry
   F: Float32Array // 닫힌 모찌 위치
-  O: Float32Array // 펼쳐진 시트 위치
-  lift: Float32Array // 접어 올릴 때 들리는 방향
+  O: Float32Array // 바닥에 평평하게 펼쳐진 시트 위치
   nrm: Float32Array // 방사 방향 (닫힌 형태 기준)
   phi: Float32Array
   rho: Float32Array
   c: Float32Array // 덮인 정도 (0 펼침 → 1 감쌈)
-  cT: Float32Array
   cBase: Float32Array // 붙어서 고정된 정도
+  w: Float32Array // 지금 잡은 지점에 함께 끌려오는 가중치
+  str: Float32Array // 늘어난 오프셋 (손가락을 끈적하게 늦게 따라감)
+  col: Float32Array // 잡을 수 있는 곳 하이라이트용 버텍스 컬러
   seam: Float32Array // 이음매 (성형 전 울퉁불퉁함)
   disp: Float32Array // 점탄성 변위
   vel: Float32Array
@@ -519,7 +521,7 @@ type Engine = {
   phase: Phase
   roll: number
   rollPhase: number
-  pull: { active: boolean; phi: number; a: number }
+  pull: { active: boolean; gi: number; dx: number; dy: number; dz: number }
   press: {
     active: boolean
     gx: number
@@ -578,7 +580,7 @@ function createEngine(): Engine {
     phase: 'upload',
     roll: 0,
     rollPhase: 0,
-    pull: { active: false, phi: 0, a: 0 },
+    pull: { active: false, gi: -1, dx: 0, dy: 0, dz: 0 },
     press: { active: false, gx: 0, gy: 0, gz: 0, dx: 0, dy: 0, dz: 0, dragging: false, vx: 0, vy: 0, vz: -1 },
     pulls: 0,
     camNudge: 0,
@@ -592,7 +594,6 @@ function buildDough(): DoughSim {
   const n = 1 + NR * NS
   const F = new Float32Array(n * 3)
   const O = new Float32Array(n * 3)
-  const lift = new Float32Array(n * 3)
   const nrm = new Float32Array(n * 3)
   const phi = new Float32Array(n)
   const rho = new Float32Array(n)
@@ -609,20 +610,9 @@ function buildDough(): DoughSim {
     nrm.set([fx / l, fy / l, fz / l], i * 3)
     phi[i] = p
     rho[i] = r
-    if (r <= RHO0) {
-      O.set([fx, fy, fz], i * 3)
-      c[i] = cBase[i] = 1
-    } else {
-      // 그릇 테두리에서 바깥·아래로 늘어져 바닥에 펼쳐진 시트
-      const th0 = RHO0 * Math.PI
-      const [rx0, ry0, rz0] = mochiShape(Math.sin(th0) * Math.cos(p), -Math.cos(th0), Math.sin(th0) * Math.sin(p))
-      const rimR = Math.hypot(rx0, rz0)
-      const s = (r - RHO0) / (1 - RHO0)
-      const drop = Math.min(ry0 - (FLOOR_Y + 0.015), s * 1.1)
-      const rr = rimR + s * 0.85 + 0.035 * Math.sin(5 * p + 1) * s
-      O.set([Math.cos(p) * rr, ry0 - drop, Math.sin(p) * rr], i * 3)
-      lift.set([Math.cos(p) * 0.25 * s, 0.55 * s, Math.sin(p) * 0.25 * s], i * 3)
-    }
+    // 바닥에 평평하게 펴 둔 반죽 시트 (손으로 편 듯 가장자리만 살짝 울퉁불퉁)
+    const rr = SHEET_R * r * (1 + 0.025 * Math.sin(5 * p + 1) * r)
+    O.set([Math.cos(p) * rr, FLOOR_Y + 0.012, Math.sin(p) * rr], i * 3)
   }
   set(0, 0, 0)
   for (let j = 1; j <= NR; j++) for (let s = 0; s < NS; s++) set(1 + (j - 1) * NS + s, j / NR, (s / NS) * TAU)
@@ -638,9 +628,9 @@ function buildDough(): DoughSim {
       idx.push(a, cc, d, a, d, b)
     }
   const geo = new THREE.BufferGeometry()
-  const pos = new Float32Array(n * 3)
-  for (let i = 0; i < n * 3; i++) pos[i] = lerp(O[i], F[i], c[Math.floor(i / 3)])
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage))
+  const col = new Float32Array(n * 3).fill(1)
+  geo.setAttribute('position', new THREE.BufferAttribute(O.slice(), 3).setUsage(THREE.DynamicDrawUsage))
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage))
   geo.setIndex(idx)
   geo.computeVertexNormals()
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 3.2)
@@ -649,13 +639,14 @@ function buildDough(): DoughSim {
     geo,
     F,
     O,
-    lift,
     nrm,
     phi,
     rho,
     c,
-    cT: c.slice(),
     cBase,
+    w: new Float32Array(n),
+    str: new Float32Array(n * 3),
+    col,
     seam: new Float32Array(n),
     disp: new Float32Array(n * 3),
     vel: new Float32Array(n * 3),
@@ -708,29 +699,65 @@ function stepEngine(e: Engine, dt: number) {
 
   if (sim && e.dough) {
     e.dough.visible = e.phase === 'wrapping' || e.phase === 'shaping' || e.phase === 'play' || e.phase === 'done'
+    // 펼친 시트는 나중에 바깥이 될 면이 바닥을 향하므로 감싸기 동안만 양면, 이후엔 앞면 + 단면 캡
+    const sheet = e.phase === 'wrapping'
+    const mat = e.dough.material as THREE.Material
+    const side = sheet ? THREE.DoubleSide : THREE.FrontSide
+    if (mat.side !== side) {
+      mat.side = side
+      mat.needsUpdate = true
+    }
+    if (e.dough.children[0]) e.dough.children[0].visible = !sheet
     if (e.dough.visible) stepDough(e, sim, dt)
   }
 }
 
 function stepDough(e: Engine, s: DoughSim, dt: number) {
   const pos = s.geo.attributes.position.array as Float32Array
+  const colAttr = s.geo.attributes.color as THREE.BufferAttribute
   if (e.phase === 'wrapping') {
-    const k = 1 - Math.exp(-dt * 5) // 손가락을 끈적하게 늦게 따라감
+    const kc = 1 - Math.exp(-dt * 5) // 붙는 반죽이 스르륵 자리 잡음
+    const ks = 1 - Math.exp(-dt * (e.pull.active ? 7 : 3.5)) // 늘어남: 끈적하게 따라오고, 놓으면 천천히 되돌아감
+    const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 380)
+    const pl = e.pull
     for (let i = 0; i < s.n; i++) {
-      let ct = s.cBase[i]
-      if (e.pull.active && s.rho[i] > RHO0) {
-        const w = gauss(angDiff(s.phi[i], e.pull.phi), 0.85)
-        ct = Math.max(ct, Math.min(1, e.pull.a * w * 1.15))
-      }
-      s.cT[i] = ct
-      s.c[i] += (ct - s.c[i]) * k
+      const j = i * 3
+      s.c[i] += (s.cBase[i] - s.c[i]) * kc
       const c = s.c[i]
-      const lf = Math.sin(Math.PI * c) * 0.6
-      for (let a = 0; a < 3; a++) {
-        const j = i * 3 + a
-        pos[j] = s.O[j] + (s.F[j] - s.O[j]) * c + s.lift[j] * lf
+      const w = pl.active ? s.w[i] : 0
+      // 잡은 지점을 중심으로 치즈처럼 늘어남 (종이접기처럼 꺾이지 않음)
+      s.str[j] += (pl.dx * w - s.str[j]) * ks
+      s.str[j + 1] += (pl.dy * w - s.str[j + 1]) * ks
+      s.str[j + 2] += (pl.dz * w - s.str[j + 2]) * ks
+      let x = s.O[j] + (s.F[j] - s.O[j]) * c + s.str[j] * (1 - c)
+      let y = s.O[j + 1] + (s.F[j + 1] - s.O[j + 1]) * c + s.str[j + 1] * (1 - c)
+      let z = s.O[j + 2] + (s.F[j + 2] - s.O[j + 2]) * c + s.str[j + 2] * (1 - c)
+      // 들려 있는 반죽은 앙금(모찌 형태) 안으로 파고들지 않고 그 위로 덮이듯 걸쳐짐
+      const lifted = Math.abs(s.str[j]) + Math.abs(s.str[j + 1]) + Math.abs(s.str[j + 2]) > 0.03 || (c > 0.02 && c < 0.98)
+      if (lifted && y > FLOOR_Y + 0.03) {
+        const l = Math.hypot(x, y, z) || 1
+        const [fx, fy, fz] = mochiShape(x / l, y / l, z / l)
+        const surf = Math.hypot(fx, fy, fz) * 1.01
+        if (l < surf) {
+          x *= surf / l
+          y *= surf / l
+          z *= surf / l
+        }
       }
+      pos[j] = x
+      pos[j + 1] = y
+      pos[j + 2] = z
+      // 하이라이트: 아직 덮지 않은 가장자리는 은은하게 숨 쉬듯, 잡은 부분은 또렷하게
+      const open = smoothstep(GRAB_RHO, GRAB_RHO + 0.25, s.rho[i]) * (1 - s.cBase[i])
+      const rim = smoothstep(0.76, 0.9, s.rho[i]) * (1 - s.cBase[i]) // 손잡이처럼 또렷한 가장자리 띠
+      // 화면상 밝기 차이(sRGB)로 정한 뒤 선형 공간 값으로 변환 — 버텍스 컬러는 선형으로 곱해짐
+      const d = Math.min(0.32, open * 0.02 + rim * (0.1 + 0.12 * pulse) + w * 0.14)
+      const v = Math.pow(1 - d, 2.2)
+      s.col[j] = v
+      s.col[j + 1] = v
+      s.col[j + 2] = v
     }
+    colAttr.needsUpdate = true
   } else {
     // 점탄성 소프트바디: 피는 가볍고 끈적해 살짝만 끌어도 길게 늘어남
     const p = e.press
@@ -782,6 +809,33 @@ function stepDough(e: Engine, s: DoughSim, dt: number) {
     for (let j = 0; j < s.n * 3; j++) {
       if (pulling) s.plast[j] += (0.55 * s.disp[j] - s.plast[j]) * Math.min(1, dt)
       else s.plast[j] *= relax
+    }
+    if (s.col[0] !== 1) {
+      s.col.fill(1)
+      colAttr.needsUpdate = true
+    }
+    // 자기 교차 방지: 안쪽으로는 반죽 두께 이상 파고들지 못하게, 전체 늘어남도 상한
+    for (let i = 0; i < s.n; i++) {
+      const j = i * 3
+      const inward = s.disp[j] * s.nrm[j] + s.disp[j + 1] * s.nrm[j + 1] + s.disp[j + 2] * s.nrm[j + 2]
+      if (inward < -0.14) {
+        const fix = -0.14 - inward
+        s.disp[j] += s.nrm[j] * fix
+        s.disp[j + 1] += s.nrm[j + 1] * fix
+        s.disp[j + 2] += s.nrm[j + 2] * fix
+        const vin = s.vel[j] * s.nrm[j] + s.vel[j + 1] * s.nrm[j + 1] + s.vel[j + 2] * s.nrm[j + 2]
+        if (vin < 0) {
+          s.vel[j] -= s.nrm[j] * vin
+          s.vel[j + 1] -= s.nrm[j + 1] * vin
+          s.vel[j + 2] -= s.nrm[j + 2] * vin
+        }
+      }
+      const m = Math.hypot(s.disp[j], s.disp[j + 1], s.disp[j + 2])
+      if (m > 1.5) {
+        s.disp[j] *= 1.5 / m
+        s.disp[j + 1] *= 1.5 / m
+        s.disp[j + 2] *= 1.5 / m
+      }
     }
     const shaping = e.phase === 'shaping'
     const eRoll = shaping ? easeInOut(e.roll) : 1
@@ -868,16 +922,30 @@ function biteMaterial<T extends THREE.MeshStandardMaterial>(
       .replace(
         '#include <color_fragment>',
         `#include <color_fragment>
-  if (!gl_FrontFacing) diffuseColor.rgb = uInterior; // 베어문 단면
   diffuseColor.rgb *= 1.0 + uGrain * (fract(sin(dot(floor(mochiP * uGrainScale), vec3(12.9898, 78.233, 37.719))) * 43758.5453) - 0.5);`,
       )
       .replace(
         '#include <opaque_fragment>',
         // 가장자리로 갈수록 빛이 스며 나오는 가짜 서브서피스 스캐터링
-        'if (gl_FrontFacing) outgoingLight += uSSS * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.0);\n#include <opaque_fragment>',
+        'outgoingLight += uSSS * pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 2.0);\n#include <opaque_fragment>',
       )
   }
   return mat
+}
+
+/**
+ * 베어문 단면: 안쪽 면(BackSide)을 거의 자체 발광으로 고르게 칠함.
+ * 조명을 받으면 구멍마다 둥근 음영(물방울 얼룩)이 생기므로 빛의 영향을 최소화.
+ */
+function capMaterial(hex: string) {
+  const m = new THREE.MeshStandardMaterial({ roughness: 1, side: THREE.BackSide })
+  setCapColor(m, hex)
+  return m
+}
+function setCapColor(m: THREE.MeshStandardMaterial, hex: string) {
+  const c = new THREE.Color(hex)
+  m.color.copy(c).multiplyScalar(0.18)
+  m.emissive.copy(c).multiplyScalar(0.82)
 }
 
 type AnkoStyle = { label: string; swatch: string; mid: string; lo: string }
@@ -891,6 +959,7 @@ const ANKO_STYLE: Record<Anko, AnkoStyle> = {
 const NRA = 24 // 앙금 쿠션 링 수
 const NSA = 96 // 앙금 쿠션 분할 수
 const ROUND_R = 0.56 // 동그랗게 빚었을 때 피사체 원의 반지름
+const PHOTO_GAP = 0.022 // 앙금 표면과 사진 사이 간격 (깊이 충돌 방지)
 
 /** 3D 각도(y 위)에서의 피사체 외곽선 반지름 — radii는 이미지 좌표계(y 아래) 각도 */
 function silR(s: Subject, th: number) {
@@ -1032,7 +1101,7 @@ function stepCore(e: Engine, dt: number, coated: boolean, ce: number) {
     const r = lerp(r0, ROUND_R * fe * grow, k)
     let x = Math.cos(th) * r
     let y = Math.sin(th) * r
-    let z = coated ? frontZ(r, th) + 0.006 : 0
+    let z = coated ? frontZ(r, th) + PHOTO_GAP : 0
     const w = dragW(x, y, z)
     x += cd.x * w
     y += cd.y * w
@@ -1068,13 +1137,8 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
           sheen: 1,
           sheenColor: new THREE.Color('#ffffff'),
           sheenRoughness: 0.85, // 뽀송한 전분 가루의 벨벳 같은 산란
-          // 얇은 찹쌀떡 피 너머로 앙금이 은은하게 비치도록 거친 투과
-          transmission: 0.4,
-          thickness: 1.1,
-          ior: 1.3,
-          attenuationColor: new THREE.Color('#f3e6d6'),
-          attenuationDistance: 1.6,
-          side: THREE.DoubleSide,
+          vertexColors: true, // 감싸기 단계의 잡을 수 있는 곳 하이라이트
+          side: THREE.FrontSide,
         }),
         engine.uniforms,
         { interior: '#d9cfbf', grain: 0.05, grainScale: 160, sss: '#fff1e2', sssAmt: 0.3 },
@@ -1083,9 +1147,28 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
   )
   const ankoMat = useMemo(
     () =>
-      biteMaterial(new THREE.MeshStandardMaterial({ roughness: 0.96, side: THREE.DoubleSide }), engine.uniforms, {
+      biteMaterial(new THREE.MeshStandardMaterial({ roughness: 0.96, side: THREE.FrontSide }), engine.uniforms, {
         interior: '#2a120f',
         grain: 0.22,
+        grainScale: 70,
+      }),
+    [engine],
+  )
+  // 베어문 단면: 같은 지오메트리의 안쪽 면(BackSide)만 단면 색으로 그림 → 구멍 너머가 꽉 찬 속처럼 보임
+  const doughCap = useMemo(
+    () =>
+      biteMaterial(capMaterial('#e6ddd0'), engine.uniforms, {
+        interior: '#e6ddd0',
+        grain: 0.04,
+        grainScale: 120,
+      }),
+    [engine],
+  )
+  const ankoCap = useMemo(
+    () =>
+      biteMaterial(capMaterial('#2a120f'), engine.uniforms, {
+        interior: '#2a120f',
+        grain: 0.18,
         grainScale: 70,
       }),
     [engine],
@@ -1095,7 +1178,16 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
     () =>
       core
         ? biteMaterial(
-            new THREE.MeshStandardMaterial({ map: core.tex, alphaTest: 0.5, roughness: 0.72, side: THREE.DoubleSide }),
+            new THREE.MeshStandardMaterial({
+              map: core.tex,
+              alphaTest: 0.5,
+              roughness: 0.72,
+              side: THREE.FrontSide,
+              // 앙금 표면보다 항상 앞에 그려지도록 깊이를 살짝 당김
+              polygonOffset: true,
+              polygonOffsetFactor: -2,
+              polygonOffsetUnits: -4,
+            }),
             engine.uniforms,
             { interior: '#2a120f', grain: 0, grainScale: 1 },
           )
@@ -1106,9 +1198,10 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
   useEffect(() => {
     const st = ANKO_STYLE[anko]
     ankoMat.color.set(st.mid)
+    setCapColor(ankoCap, st.lo)
     ;(ankoMat.userData.local as BiteLocal).uInterior.value.set(st.lo)
     if (photoMat) (photoMat.userData.local as BiteLocal).uInterior.value.set(st.lo)
-  }, [anko, ankoMat, photoMat])
+  }, [anko, ankoMat, ankoCap, photoMat])
 
   useEffect(
     () => () => {
@@ -1124,8 +1217,10 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
       sim.geo.dispose()
       doughMat.dispose()
       ankoMat.dispose()
+      doughCap.dispose()
+      ankoCap.dispose()
     },
-    [sim, doughMat, ankoMat],
+    [sim, doughMat, ankoMat, doughCap, ankoCap],
   )
 
   useEffect(() => {
@@ -1157,14 +1252,19 @@ function Scene({ engine, subject, anko }: { engine: Engine; subject: Subject | n
         <group ref={mochiRef} position={[0, -FLOOR_Y, 0]}>
           {core && photoMat && (
             <group position={[0, CORE_Y, 0]}>
-              <mesh ref={slabRef} geometry={core.anko} material={ankoMat} visible={false} />
-              <mesh ref={photoRef} geometry={core.photo} material={photoMat} />
+              <mesh ref={slabRef} geometry={core.anko} material={ankoMat} visible={false} renderOrder={1}>
+                <mesh geometry={core.anko} material={ankoCap} renderOrder={1} />
+              </mesh>
+              <mesh ref={photoRef} geometry={core.photo} material={photoMat} renderOrder={2} />
             </group>
           )}
-          <mesh ref={doughRef} geometry={sim.geo} material={doughMat} visible={false} />
+          <mesh ref={doughRef} geometry={sim.geo} material={doughMat} visible={false} renderOrder={3}>
+            <mesh geometry={sim.geo} material={doughCap} renderOrder={3} />
+          </mesh>
         </group>
       </group>
-      <ContactShadows position={[0, FLOOR_Y + 0.001, 0]} scale={6} blur={2.6} opacity={0.42} far={2} resolution={512} />
+      {/* 바닥 접촉 그림자: 모찌 높이만큼만 잡아 짙게 뭉치지 않도록 */}
+      <ContactShadows position={[0, FLOOR_Y + 0.002, 0]} scale={6} blur={2.8} opacity={0.36} far={1.4} resolution={512} />
       <OrbitControls
         ref={controlsRef}
         makeDefault
@@ -1488,7 +1588,7 @@ async function composeResult(shot: string, anko: AnkoStyle, bites: number) {
  * 9. App
  * ════════════════════════════════════════════════════════════════════════ */
 
-type Gesture = 'none' | 'core' | 'pull' | 'rub' | 'squish' | 'bite'
+type Gesture = 'none' | 'hold' | 'core' | 'pull' | 'rub' | 'squish' | 'bite'
 
 export default function MochiApp() {
   const [state, dispatch] = useReducer(reducer, initialState)
@@ -1518,9 +1618,6 @@ export default function MochiApp() {
     lastY: 0,
     lastT: 0,
     lastAng: 0,
-    topX: 0,
-    topY: 0,
-    topDist: 1,
     stretching: false,
     plane: new THREE.Plane(),
   })
@@ -1651,7 +1748,7 @@ export default function MochiApp() {
       new THREE.Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1),
       e.camera,
     )
-    const list = objs.filter((o): o is THREE.Object3D => !!o && o.visible)
+    const list = objs.filter((o): o is THREE.Object3D => !!o && o.visible && (!o.parent || o.parent.visible))
     for (const hit of raycaster.intersectObjects(list, false)) {
       if (hit.object === e.photo && e.subject && hit.uv && e.subject.alphaAt(hit.uv.x, hit.uv.y) < 128) continue
       const local = e.mochiG.worldToLocal(hit.point.clone())
@@ -1746,26 +1843,33 @@ export default function MochiApp() {
   }
 
   /* ── 반죽 감싸기 ────────────────────────────────────────────── */
-  const tryStartPull = (local: THREE.Vector3, clientX: number, clientY: number) => {
+  const tryStartPull = (local: THREE.Vector3, hitPoint: THREE.Vector3) => {
     const e = engineRef.current
     const s = e.sim
-    if (!s) return false
-    // 반죽 어디를 잡든(그릇 벽 포함) 그 방향의 아직 덮이지 않은 반죽을 끌어올림
-    const phi = Math.atan2(local.z, local.x)
-    let open = 0
-    let cnt = 0
+    if (!s || !e.camera) return false
+    // 잡은 자리에서 가장 가까운, 아직 덮이지 않은 시트 꼭짓점
+    const pos = s.geo.attributes.position.array as Float32Array
+    let gi = -1
+    let bd = 0.75 * 0.75 // 이미 덮인 곳을 잡아도 가까운 덮이지 않은 가장자리를 잡아줌
     for (let i = 0; i < s.n; i++) {
-      if (s.rho[i] <= RHO0 || angDiff(s.phi[i], phi) > 0.35) continue
-      open += 1 - s.cBase[i]
-      cnt++
+      if (s.rho[i] < GRAB_RHO || s.cBase[i] > 0.5) continue
+      const d = (pos[i * 3] - local.x) ** 2 + (pos[i * 3 + 1] - local.y) ** 2 + (pos[i * 3 + 2] - local.z) ** 2
+      if (d < bd) {
+        bd = d
+        gi = i
+      }
     }
-    if (!cnt || open / cnt < 0.08) return false
-    const g = gestRef.current
-    const top = toScreen(0, TOP_Y, 0)
-    g.topX = top.x
-    g.topY = top.y
-    g.topDist = Math.max(40, Math.hypot(clientX - top.x, clientY - top.y))
-    e.pull = { active: true, phi, a: 0 }
+    if (gi < 0) return false
+    // 함께 끌려오는 범위: 잡은 지점에서 시트 위 호 길이로 퍼지는 가중치 (앙금 발밑은 고정)
+    const pg = s.phi[gi]
+    for (let i = 0; i < s.n; i++) {
+      const r = s.rho[i] * SHEET_R
+      const arc = angDiff(s.phi[i], pg) * Math.max(r, 0.6)
+      const radial = smoothstep(GRAB_RHO - 0.12, GRAB_RHO + 0.1, s.rho[i])
+      s.w[i] = gauss(arc, 1.1) * radial * (1 - s.cBase[i])
+    }
+    gestRef.current.plane.setFromNormalAndCoplanarPoint(e.camera.getWorldDirection(new THREE.Vector3()).negate(), hitPoint)
+    e.pull = { active: true, gi, dx: 0, dy: 0, dz: 0 }
     sfx.stretchStart()
     buzz(6)
     return true
@@ -1776,11 +1880,17 @@ export default function MochiApp() {
     const s = e.sim
     sfx.stretchEnd()
     if (!s || !e.pull.active) return
-    const stuck = e.pull.a >= 0.5
     e.pull.active = false
-    if (!stuck) return // 충분히 끌어올리지 못하면 끈적하게 원래 자리로
-    // '착' — 끌어올린 반죽이 앙금에 들러붙어 고정
-    for (let i = 0; i < s.n; i++) if (s.rho[i] > RHO0) s.cBase[i] = Math.max(s.cBase[i], smoothstep(0.35, 0.65, s.cT[i]))
+    // 잡은 끝이 앙금 위까지 넘어왔으면 성공 — 아니면 끈적하게 원래 자리로 되돌아감
+    const pos = s.geo.attributes.position.array as Float32Array
+    const g = e.pull.gi * 3
+    const startR = Math.hypot(s.O[g], s.O[g + 2])
+    const nowR = Math.hypot(pos[g], pos[g + 2])
+    // 축 가까이 끌어왔거나, 앙금 옆면을 타고 충분히 높이 올라왔으면 성공
+    const stuck = nowR < startR * 0.45 || pos[g + 1] > FLOOR_Y + 0.55
+    if (!stuck) return
+    // '착' — 늘어난 반죽이 앙금에 들러붙어 고정
+    for (let i = 0; i < s.n; i++) s.cBase[i] = Math.max(s.cBase[i], smoothstep(0.2, 0.6, s.w[i]))
     e.pulls++
     window.setTimeout(() => sfx.splat(1), 40)
     buzz([10, 30, 14])
@@ -1789,7 +1899,7 @@ export default function MochiApp() {
     let sum = 0
     let cnt = 0
     for (let i = 0; i < s.n; i++)
-      if (s.rho[i] > RHO0) {
+      if (s.rho[i] > GRAB_RHO) {
         sum += s.cBase[i]
         cnt++
       }
@@ -1798,7 +1908,7 @@ export default function MochiApp() {
     if (cover >= 0.85 || e.pulls >= 5) {
       // 남은 틈은 봉합하며 이음매로 남김 → 성형 단계에서 둥글게 다듬음
       for (let i = 0; i < s.n; i++) {
-        s.seam[i] = (1 - s.cBase[i]) + (s.rho[i] > 0.85 ? (s.rho[i] - 0.85) * 4 : 0)
+        s.seam[i] = (s.rho[i] > GRAB_RHO ? 1 - s.cBase[i] : 0) + (s.rho[i] > 0.85 ? (s.rho[i] - 0.85) * 4 : 0)
         s.cBase[i] = 1
       }
       later(() => {
@@ -1824,7 +1934,8 @@ export default function MochiApp() {
       if (pick(x, y, [e.slab, e.photo])) kind = 'core'
     } else if (ph === 'wrapping') {
       const p = pick(x, y, [e.dough])
-      if (p && tryStartPull(p.local, x, y)) kind = 'pull'
+      // 반죽 위를 누른 경우엔 잡을 곳이 없어도 시점이 돌아가지 않게 제스처를 소비
+      if (p) kind = tryStartPull(p.local, p.hit.point) ? 'pull' : 'hold'
     } else if (ph === 'shaping') {
       const p = pick(x, y, [e.dough])
       if (p) {
@@ -1832,7 +1943,8 @@ export default function MochiApp() {
         e.press = { active: true, gx: p.local.x, gy: p.local.y, gz: p.local.z, dx: 0, dy: 0, dz: 0, dragging: false, ...viewLocal() }
       }
     } else {
-      const p = pick(x, y, [e.dough, e.slab, e.photo])
+      // 구멍 안쪽 단면(캡)도 대상 → 이미 베어문 자리 안쪽을 계속 베어먹을 수 있음
+      const p = pick(x, y, [e.dough, e.dough?.children[0] ?? null, e.slab, e.slab?.children[0] ?? null, e.photo])
       if (p) {
         if (modeRef.current === 'bite') {
           kind = 'bite'
@@ -1877,9 +1989,25 @@ export default function MochiApp() {
     g.lastY = y
     g.lastT = now
 
-    if (g.kind === 'pull') {
-      e.pull.a = clamp(1 - Math.hypot(x - g.topX, y - g.topY) / g.topDist, 0, 1.15)
-      sfx.stretchUpdate(e.pull.a, speed)
+    if (g.kind === 'pull' && e.camera && e.gl && e.mochiG && e.sim) {
+      const rect = e.gl.domElement.getBoundingClientRect()
+      raycaster.setFromCamera(
+        new THREE.Vector2(((x - rect.left) / rect.width) * 2 - 1, -((y - rect.top) / rect.height) * 2 + 1),
+        e.camera,
+      )
+      const wp = raycaster.ray.intersectPlane(g.plane, new THREE.Vector3())
+      if (wp) {
+        const lp = e.mochiG.worldToLocal(wp)
+        const gi = e.pull.gi * 3
+        const O = e.sim.O
+        const dx = lp.x - O[gi]
+        const dz = lp.z - O[gi + 2]
+        // 손가락 위치까지 쭉 늘어나되, 위로 살짝 들려 아치를 그림
+        e.pull.dx = dx
+        e.pull.dy = lp.y - O[gi + 1] + 0.18 * Math.hypot(dx, dz)
+        e.pull.dz = dz
+        sfx.stretchUpdate(Math.hypot(dx, dz) / 1.6, speed)
+      }
     } else if (g.kind === 'rub') {
       const c = toScreen(0, 0, 0)
       const a = Math.atan2(y - c.y, x - c.x)
@@ -2056,7 +2184,7 @@ export default function MochiApp() {
       case 'coating':
         return '피사체를 감쌀 앙금을 골라주세요'
       case 'wrapping':
-        return '반죽 가장자리를 잡고 위로 끌어올려 덮어주세요'
+        return '빛나는 반죽 가장자리를 잡고 앙금 위로 쭉 늘려 덮어주세요'
       case 'shaping':
         return '반죽 위에서 원을 그리며 문질러 둥글게 빚어주세요'
       case 'play':
@@ -2096,7 +2224,7 @@ export default function MochiApp() {
       >
         <Canvas
           dpr={[1, 2]}
-          camera={{ position: [0, 0.75, 5.2], fov: 32 }}
+          camera={{ position: [0, 0.75, 5.2], fov: 32, near: 0.5, far: 30 }}
           gl={{ preserveDrawingBuffer: true, antialias: true }}
         >
           <Scene key={state.session} engine={engineRef.current} subject={state.subject} anko={state.anko} />
