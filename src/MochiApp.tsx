@@ -1376,14 +1376,67 @@ const sfx = (() => {
     src.start(t)
   }
 
+  /**
+   * 기포 한 알 — 물속 기포가 터질 때처럼 사인파 음높이가 지수적으로 올라가며 빠르게 사라진다
+   * (Farnell, Designing Sound의 bubble 모델). 젖은 소리의 '촉촉함'은 대부분 이 미세한 기포에서 나온다.
+   */
+  const bubble = (a: AudioContext, f: number, t0: number, gain: number, dur = 0.05, rise = 2.2) => {
+    const o = a.createOscillator()
+    const g = a.createGain()
+    const t = a.currentTime + t0
+    o.type = 'sine'
+    o.frequency.setValueAtTime(f, t)
+    o.frequency.exponentialRampToValueAtTime(f * rise, t + dur)
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(gain, t + 0.002)
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    o.connect(g).connect(bus!)
+    o.start(t)
+    o.stop(t + dur + 0.02)
+  }
+
+  /** 기포 여러 알이 잘게 흩어지는 '찰박' 질감 */
+  const droplets = (a: AudioContext, n: number, t0: number, spread: number, fLo: number, fHi: number, gain: number) => {
+    for (let k = 0; k < n; k++) {
+      const f = fLo * Math.pow(fHi / fLo, Math.random())
+      bubble(a, f, t0 + Math.random() * spread, gain * (0.5 + Math.random() * 0.5), 0.025 + Math.random() * 0.04, 1.6 + Math.random() * 1.4)
+    }
+  }
+
+  /** 질척한 '쮸웁' — 공명 필터가 모음처럼 훑고 지나가는 젖은 노이즈 */
+  const squelch = (a: AudioContext, t0: number, dur: number, fFrom: number, fTo: number, gain: number, q = 6) => {
+    const len = Math.ceil(a.sampleRate * dur)
+    const buf = a.createBuffer(1, len, a.sampleRate)
+    const data = buf.getChannelData(0)
+    let prev = 0
+    for (let i = 0; i < len; i++) {
+      prev = prev * 0.6 + (Math.random() * 2 - 1) * 0.4
+      data[i] = prev
+    }
+    const src = a.createBufferSource()
+    src.buffer = buf
+    const f = a.createBiquadFilter()
+    f.type = 'bandpass'
+    f.Q.value = q
+    const t = a.currentTime + t0
+    f.frequency.setValueAtTime(fFrom, t)
+    f.frequency.exponentialRampToValueAtTime(fTo, t + dur)
+    const g = a.createGain()
+    g.gain.setValueAtTime(0.0001, t)
+    g.gain.exponentialRampToValueAtTime(gain, t + Math.min(0.02, dur / 4))
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur)
+    src.connect(f).connect(g).connect(bus!)
+    src.start(t)
+  }
+
   /** '철퍽/찰싹' */
   const splat = (i = 1) => {
     const a = ctx()
     if (!a) return
-    tone(a, 'sine', 150, 62, 0, 0.11, 0.24 * i)
-    noise(a, 'bandpass', 850, 1.2, 0, 0.05, 0.17 * i, 0.002)
-    tone(a, 'sine', 330, 190, 0.016, 0.045, 0.06 * i)
-    noise(a, 'lowpass', 520, 0.7, 0.01, 0.09, 0.08 * i, 0.008)
+    tone(a, 'sine', 150, 62, 0, 0.11, 0.22 * i)
+    noise(a, 'lowpass', 700, 0.7, 0, 0.07, 0.12 * i, 0.002)
+    squelch(a, 0.004, 0.11, 1300, 420, 0.22 * i, 5)
+    droplets(a, 5, 0.02, 0.09, 500, 1500, 0.07 * i)
   }
 
   /** 놓을 때 — 젖은 빨판이 '뽁' 떨어지는 글리산도 */
@@ -1404,7 +1457,11 @@ const sfx = (() => {
     g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18)
     o.stop(t + 0.2)
     lfo.stop(t + 0.2)
-    if (glide && !muted) noise(ac, 'bandpass', 1400, 4, 0.08, 0.04, 0.05)
+    if (glide && !muted && bus) {
+      // 빨판이 떨어지는 '뽁' + 뒤따르는 잔 기포
+      bubble(ac, 380, 0.07, 0.16, 0.07, 3.2)
+      droplets(ac, 3, 0.12, 0.08, 700, 1600, 0.05)
+    }
   }
 
   return {
@@ -1459,20 +1516,24 @@ const sfx = (() => {
       voice.f.frequency.setTargetAtTime(380 + 900 * m, t, 0.09)
       voice.g.gain.setTargetAtTime(0.035 + 0.045 * Math.min(1, m), t, 0.08)
       const now = performance.now()
-      if (speed > 0.6 && now - lastCrackle > 55 + Math.random() * 90) {
+      if (speed > 0.4 && now - lastCrackle > 45 + Math.random() * 80) {
         lastCrackle = now
-        noise(a, 'bandpass', 700 + Math.random() * 900, 7, 0, 0.022, 0.025 + 0.02 * Math.min(1, speed / 3), 0.002)
+        // 늘어나는 반죽 속 기포가 터지는 '쪽쪽' 소리
+        const v = Math.min(1, speed / 3)
+        bubble(a, 500 + Math.random() * 900 + 300 * m, 0, 0.04 + 0.05 * v, 0.03 + Math.random() * 0.03, 1.8 + Math.random())
+        if (Math.random() < 0.35) squelch(a, 0, 0.06, 900 + 500 * m, 500, 0.06 * v, 8)
       }
     },
     /** '쫩/우묵' */
     bite() {
       const a = ctx()
       if (!a) return
-      noise(a, 'bandpass', 1250, 1.8, 0, 0.04, 0.13, 0.002)
-      tone(a, 'sine', 210, 82, 0, 0.22, 0.26, 520)
-      noise(a, 'lowpass', 780, 0.8, 0.02, 0.24, 0.12, 0.03)
-      tone(a, 'triangle', 270, 140, 0.13, 0.09, 0.08, 900)
-      noise(a, 'bandpass', 460, 4, 0.24, 0.13, 0.05, 0.02)
+      // 이빨이 들어가는 '쫍' → 떡이 늘어나며 떨어지는 '쮸웁' → 씹을 때 잔 기포
+      squelch(a, 0, 0.07, 1800, 900, 0.2, 4)
+      tone(a, 'sine', 210, 82, 0, 0.2, 0.22, 520)
+      squelch(a, 0.05, 0.26, 1100, 320, 0.2, 7)
+      bubble(a, 300, 0.2, 0.15, 0.08, 2.8)
+      droplets(a, 7, 0.08, 0.3, 450, 1400, 0.06)
     },
     rub() {
       const now = performance.now()
@@ -1480,22 +1541,24 @@ const sfx = (() => {
       lastRub = now
       const a = ctx()
       if (!a) return
-      noise(a, 'bandpass', 560 + Math.random() * 200, 0.9, 0, 0.1, 0.045, 0.03)
-      tone(a, 'sine', 120, 95, 0, 0.08, 0.025)
+      squelch(a, 0, 0.1, 700 + Math.random() * 300, 380, 0.07, 5)
+      droplets(a, 2, 0.01, 0.07, 600, 1400, 0.035)
     },
     coat() {
       const a = ctx()
       if (!a) return
-      noise(a, 'lowpass', 650, 1.4, 0, 0.42, 0.1, 0.12)
-      tone(a, 'triangle', 85, 120, 0, 0.36, 0.06, 400)
-      noise(a, 'bandpass', 900, 3, 0.3, 0.05, 0.05)
+      // 앙금을 펴 바르는 '츄르릅'
+      squelch(a, 0, 0.42, 400, 1000, 0.12, 4)
+      tone(a, 'triangle', 85, 120, 0, 0.36, 0.05, 400)
+      droplets(a, 6, 0.05, 0.35, 400, 1200, 0.05)
     },
     seal() {
       splat(1.15)
       const a = ctx()
       if (!a) return
-      noise(a, 'lowpass', 520, 0.8, 0.04, 0.4, 0.09, 0.06)
+      squelch(a, 0.04, 0.34, 900, 260, 0.14, 6)
       tone(a, 'sine', 110, 58, 0.03, 0.34, 0.12)
+      bubble(a, 260, 0.28, 0.12, 0.09, 2.6)
     },
     done() {
       const a = ctx()
@@ -2233,9 +2296,8 @@ export default function MochiApp() {
 
       {/* 헤더 */}
       <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 pt-[max(env(safe-area-inset-top),18px)]">
-        <span className="text-[12px] font-medium tracking-[0.32em]">MOCHI</span>
         <div className="flex items-center gap-3 text-[11px] tracking-[0.12em] text-mute">
-          <span className="tabular-nums text-ink">{String(step + 1).padStart(2, '0')}</span>
+          <span className="font-bold tabular-nums text-ink">{String(step + 1).padStart(2, '0')}</span>
           <span className="h-px w-6 bg-line" />
           <span>{STEPS[step]}</span>
         </div>
@@ -2291,10 +2353,9 @@ export default function MochiApp() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
           >
-            <h1 className="mb-8 max-w-[19rem] text-center text-[19px] font-light leading-[1.6] tracking-[-0.02em]">
-              찹쌀떡으로 감싸버리고 싶은 것이 있다면
-              <br />
-              첨부해주세요
+            <h1 className="mb-8 text-center text-[19px] leading-[1.6] tracking-[-0.03em]">
+              <span className="block font-bold text-ink">찹쌀떡으로 감싸버리고 싶은 것이 있다면</span>
+              <span className="block font-normal text-mute">첨부해주세요</span>
             </h1>
             <button
               type="button"
@@ -2331,7 +2392,7 @@ export default function MochiApp() {
             <div className="relative h-px w-32 bg-line">
               <div className="absolute inset-y-0 left-0 bg-ink" style={{ width: `${state.cover * 100}%` }} />
             </div>
-            <span className="tabular-nums">덮음 {Math.round(state.cover * 100)}%</span>
+            <span className="tabular-nums">덮음 <b className="font-bold text-ink">{Math.round(state.cover * 100)}%</b></span>
           </div>
         )}
         {state.phase === 'shaping' && (
@@ -2344,7 +2405,7 @@ export default function MochiApp() {
         )}
         {state.phase === 'play' && (
           <span className="text-[11px] tabular-nums text-mute">
-            {state.bites}입 · 남은 양 {Math.max(0, Math.round(state.remaining * 100))}%
+            <b className="font-bold text-ink">{state.bites}입</b> · 남은 양 {Math.max(0, Math.round(state.remaining * 100))}%
           </span>
         )}
       </div>
@@ -2415,7 +2476,7 @@ export default function MochiApp() {
                       dispatch({ type: 'SET_ANKO', anko: a })
                     }}
                     className={`flex h-10 flex-1 items-center justify-center gap-2 rounded-full text-[14px] transition-colors duration-300 ${
-                      state.anko === a ? 'bg-ink text-white' : 'text-mute hover:text-ink'
+                      state.anko === a ? 'bg-ink font-semibold text-white' : 'text-mute hover:text-ink'
                     }`}
                   >
                     <span className="h-3 w-3 rounded-full border border-white/40" style={{ background: ANKO_STYLE[a].swatch }} />
@@ -2451,7 +2512,7 @@ export default function MochiApp() {
                       buzz(4)
                     }}
                     className={`flex h-11 flex-1 items-center justify-center gap-2 rounded-full text-[14px] transition-colors duration-300 ${
-                      state.mode === m ? 'bg-ink text-white' : 'text-mute hover:text-ink'
+                      state.mode === m ? 'bg-ink font-semibold text-white' : 'text-mute hover:text-ink'
                     }`}
                   >
                     {icon}
@@ -2476,7 +2537,7 @@ export default function MochiApp() {
             transition={{ duration: 0.5 }}
           >
             <div className="flex items-baseline gap-4">
-              <h1 className="text-5xl font-extralight tracking-tight">完食</h1>
+              <h1 className="text-5xl font-bold tracking-tight">完食</h1>
               <span className="text-[12px] tracking-[0.2em] text-mute">{state.bites} BITES</span>
             </div>
             <img
@@ -2588,7 +2649,7 @@ function LineButton({
         iconOnly ? 'w-12 shrink-0' : 'px-5'
       } ${grow ? 'flex-1' : 'shrink-0'} ${
         primary
-          ? 'border-ink bg-ink text-white hover:bg-black'
+          ? 'border-ink bg-ink font-semibold text-white hover:bg-black'
           : active
             ? 'border-ink bg-white text-ink'
             : 'border-line bg-white text-ink hover:border-ink'
