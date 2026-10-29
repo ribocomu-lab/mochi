@@ -24,6 +24,7 @@ import {
   VolumeX,
 } from 'lucide-react'
 import * as THREE from 'three'
+import { detectFace, type Face } from './face'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { ContactShadows, OrbitControls } from '@react-three/drei'
 
@@ -45,6 +46,7 @@ type Subject = {
   radii: Float32Array // 무게중심 기준 외곽선 반지름 (3D 단위, 이미지 좌표계 각도)
   alphaAt: (u: number, v: number) => number // 레이캐스트용 알파 조회 (0..255)
   cut: boolean
+  focus: { x: number; y: number; r: number } | null // 얼굴 중심/반지름 (사진 평면 3D 좌표, 무게중심 기준)
 }
 
 type State = {
@@ -281,7 +283,7 @@ function largestComponent(m: Uint8Array, w: number, h: number) {
  * 알파 마스크(사진과 같은 해상도, 0..255)로 피사체를 만든다.
  * alpha가 null이면 원본 알파(투명 PNG) — mode='plain'이면 부드러운 타원 크롭.
  */
-function buildSubject(photo: HTMLCanvasElement, alpha: Uint8Array | null, mode: 'mask' | 'png' | 'plain'): Subject {
+function buildSubject(photo: HTMLCanvasElement, alpha: Uint8Array | null, mode: 'mask' | 'png' | 'plain', face: Face | null): Subject {
   const W = photo.width
   const H = photo.height
   const img = photo.getContext('2d')!.getImageData(0, 0, W, H)
@@ -411,14 +413,17 @@ function buildSubject(photo: HTMLCanvasElement, alpha: Uint8Array | null, mode: 
   const alphaAt = (u: number, v: number) =>
     ad[(clamp(Math.floor((1 - v) * ah), 0, ah - 1) * aw + clamp(Math.floor(u * aw), 0, aw - 1)) * 4 + 3]
 
+  const ox = cx * k - bx
+  const oy = cy * k - by
   return {
     cutout,
-    ox: (cx * k - bx),
-    oy: (cy * k - by),
+    ox,
+    oy,
     scale: lo,
     radii: rpx.map((v) => v * lo),
     alphaAt,
     cut: mode !== 'plain',
+    focus: face ? { x: (face.x - bx - ox) * lo, y: -(face.y - by - oy) * lo, r: face.r * lo } : null,
   }
 }
 
@@ -1099,18 +1104,33 @@ function stepCore(e: Engine, dt: number, coated: boolean, ce: number) {
 
   const pos = c.photo.attributes.position.array as Float32Array
   const B = c.photoBase
+  const fc = s.focus
   for (let i = 0; i < B.length / 3; i++) {
     const x0 = B[i * 3]
     const y0 = B[i * 3 + 1]
-    const r0 = Math.hypot(x0, y0)
-    const th = Math.atan2(y0, x0)
-    // 외곽선 → 원으로 정규화 + 중심이 살짝 부푸는 어안 곡선 (빈 곳은 늘려서 채움)
-    const xn = r0 / Math.max(1e-3, silR(s, th))
-    const fe = xn < 1 ? Math.sin((xn * Math.PI) / 2) * 0.65 + xn * 0.35 : 1 + (xn - 1) * 0.7
-    const r = lerp(r0, ROUND_R * fe * grow, k)
-    let x = Math.cos(th) * r * sx
-    let y = Math.sin(th) * r
-    let z = coated ? frontZ(r, th) + PHOTO_GAP : 0
+    let r1: number
+    let th: number
+    if (fc) {
+      // 얼굴: 이목구비를 중심에 두고 모든 방향을 같은 비율로 — 가운데가 크게 부풀고
+      // 머리카락·몸은 가장자리로 눌려 모이는 광각 셀카 느낌 (가로로 늘이지 않음)
+      const dx = x0 - fc.x
+      const dy = y0 - fc.y
+      th = Math.atan2(dy, dx)
+      const xn = Math.hypot(dx, dy) / (fc.r * 1.55)
+      const fe = xn < 1 ? Math.sin((xn * Math.PI) / 2) * 0.7 + xn * 0.3 : 1 + 0.12 * (1 - Math.exp(-(xn - 1) * 2.5))
+      r1 = ROUND_R * fe * grow
+    } else {
+      // 사물: 외곽선 → 원으로 정규화 + 중심이 살짝 부푸는 어안 곡선 (빈 곳은 늘려서 채움)
+      th = Math.atan2(y0, x0)
+      const xn = Math.hypot(x0, y0) / Math.max(1e-3, silR(s, th))
+      const fe = xn < 1 ? Math.sin((xn * Math.PI) / 2) * 0.65 + xn * 0.35 : 1 + (xn - 1) * 0.7
+      r1 = ROUND_R * fe * grow * Math.max(1, sx * Math.abs(Math.cos(th)) ** 2)
+    }
+    let x = lerp(x0, Math.cos(th) * r1, k)
+    let y = lerp(y0, Math.sin(th) * r1, k)
+    // 앙금 쿠션은 가로로 sx배 → 같은 자리의 쿠션 표면 높이에 붙임
+    const ux = x / sx
+    let z = coated ? frontZ(Math.hypot(ux, y), Math.atan2(y, ux)) + PHOTO_GAP : 0
     const w = dragW(x, y, z)
     x += cd.x * w
     y += cd.y * w
@@ -2188,18 +2208,20 @@ export default function MochiApp() {
     const session = state.session
     try {
       const photo = await getPhoto()
-      const plain = buildSubject(photo, null, 'plain')
+      // 얼굴이 있으면 동그랗게 빚을 때 이목구비가 어안렌즈 중심에 오도록
+      const facing = detectFace(photo)
       if (hasTransparency(photo)) {
         // 투명 PNG는 그대로 통과
-        dispatch({ type: 'SUBJECT_READY', subject: buildSubject(photo, null, 'png'), alt: plain })
+        const face = await facing
+        dispatch({ type: 'SUBJECT_READY', subject: buildSubject(photo, null, 'png', face), alt: buildSubject(photo, null, 'plain', face) })
         return
       }
       try {
-        const mask = await runSegmentation(photo, (msg) => dispatch({ type: 'PROCESS_MSG', msg }))
+        const [mask, face] = await Promise.all([runSegmentation(photo, (msg) => dispatch({ type: 'PROCESS_MSG', msg })), facing])
         if (session !== state.session) return
-        dispatch({ type: 'SUBJECT_READY', subject: buildSubject(photo, mask, 'mask'), alt: plain })
+        dispatch({ type: 'SUBJECT_READY', subject: buildSubject(photo, mask, 'mask', face), alt: buildSubject(photo, null, 'plain', face) })
       } catch {
-        dispatch({ type: 'SUBJECT_READY', subject: plain, alt: null })
+        dispatch({ type: 'SUBJECT_READY', subject: buildSubject(photo, null, 'plain', await facing), alt: null })
         setToast('AI 모델을 불러오지 못해 원본을 사용합니다')
       }
     } catch {
