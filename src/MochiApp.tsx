@@ -22,6 +22,7 @@ import {
   Utensils,
   Volume2,
   VolumeX,
+  ArrowUpRight,
 } from 'lucide-react'
 import * as THREE from 'three'
 import { detectFace, type Face } from './face'
@@ -2589,8 +2590,18 @@ export default function MochiApp() {
             <img
               src={state.result}
               alt="완식 결과"
-              className="mt-8 max-h-[52vh] w-[72vw] max-w-[320px] border border-line object-contain"
+              className="mt-6 max-h-[42vh] w-[64vw] max-w-[300px] border border-line object-contain"
             />
+            <a
+              href="https://bit.ly/gemhanip-insta"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-6 flex h-12 w-full max-w-md items-center justify-center gap-2 rounded-full border border-ink bg-white px-5 text-[14px] font-semibold text-ink transition-colors hover:bg-ink hover:text-white"
+            >
+              gemini 혜택으로 찹쌀떡 더 말랑하게 만들기
+              <ArrowUpRight size={16} strokeWidth={1.5} />
+            </a>
+            <p className="mt-2 text-center text-[11px] text-mute">gemini Argon으로 나만의 찹쌀떡 사이트를 만들어보세요</p>
             <div className="fixed inset-x-0 bottom-0 flex justify-center px-5 pb-[max(env(safe-area-inset-bottom),20px)]">
               <div className="flex w-full max-w-md gap-2">
                 <LineButton onClick={reset} icon={<RotateCcw size={15} strokeWidth={1.25} />}>
