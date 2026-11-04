@@ -136,10 +136,6 @@ function reducer(s: State, a: Action): State {
   }
 }
 
-const STEPS = ['피사체', '앙금', '감싸기', '빚기', '맛보기'] as const
-const stepIndex = (p: Phase) =>
-  p === 'upload' || p === 'processing' || p === 'filling' ? 0 : p === 'coating' ? 1 : p === 'wrapping' ? 2 : p === 'shaping' ? 3 : 4
-
 /* ════════════════════════════════════════════════════════════════════════
  * 2. Math & shape constants  (3D 단위: 모찌 반지름 ≈ 1, y가 위)
  * ════════════════════════════════════════════════════════════════════════ */
@@ -2304,7 +2300,6 @@ export default function MochiApp() {
         return ' '
     }
   })()
-  const step = stepIndex(state.phase)
   const showStage = state.phase !== 'upload' && state.phase !== 'processing'
 
   return (
@@ -2343,31 +2338,27 @@ export default function MochiApp() {
       </div>
 
       {/* 헤더 */}
-      <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-between px-5 pt-[max(env(safe-area-inset-top),18px)]">
-        <div className="flex items-center gap-2 text-[11px] tracking-[0.12em] text-mute">
-          <span className="font-bold tabular-nums text-ink">{String(step + 1).padStart(2, '0')}</span>
-          <span>{STEPS[step]}</span>
-        </div>
+      <header className="absolute inset-x-0 top-0 z-20 flex items-center justify-end px-5 pt-[max(env(safe-area-inset-top),18px)]">
         <div className="flex items-center gap-2">
           {state.phase === 'play' && (
             <button
               type="button"
               onClick={() => void finish()}
-              className="flex h-9 items-center gap-1.5 rounded-full border border-line bg-white px-3 text-[12px] transition-colors hover:border-ink"
+              className="flex h-9 items-center gap-1.5 rounded-full border-[1.5px] border-line bg-white px-3 text-[12px] transition-colors hover:border-ink"
             >
-              <Check size={14} strokeWidth={1.25} />
+              <Check size={14} strokeWidth={1.5} />
               완식
             </button>
           )}
           <button
             aria-label={muted ? '소리 켜기' : '소리 끄기'}
-            className="grid h-9 w-9 place-items-center rounded-full border border-line bg-white text-ink transition-colors hover:border-ink"
+            className="grid h-9 w-9 place-items-center rounded-full border-[1.5px] border-line bg-white text-ink transition-colors hover:border-ink"
             onClick={() => {
               sfx.setMuted(!muted)
               setMuted(!muted)
             }}
           >
-            {muted ? <VolumeX size={15} strokeWidth={1.25} /> : <Volume2 size={15} strokeWidth={1.25} />}
+            {muted ? <VolumeX size={15} strokeWidth={1.5} /> : <Volume2 size={15} strokeWidth={1.5} />}
           </button>
         </div>
       </header>
@@ -2408,14 +2399,14 @@ export default function MochiApp() {
               type="button"
               disabled={state.phase === 'processing'}
               onClick={() => fileRef.current?.click()}
-              className={`flex aspect-square w-[min(72vw,320px)] flex-col items-center justify-center gap-4 rounded-full border transition-colors ${
+              className={`flex aspect-square w-[min(72vw,320px)] flex-col items-center justify-center gap-4 rounded-full border-[1.5px] transition-colors ${
                 dragOver ? 'border-ink bg-white' : 'border-line bg-white/60 hover:border-mute'
               }`}
             >
               {state.phase === 'processing' ? (
                 <>
                   <motion.span
-                    className="h-8 w-8 rounded-full border border-line border-t-ink"
+                    className="h-8 w-8 rounded-full border-[1.5px] border-line border-t-ink"
                     animate={{ rotate: 360 }}
                     transition={{ repeat: Infinity, duration: 0.9, ease: 'linear' }}
                   />
@@ -2423,7 +2414,7 @@ export default function MochiApp() {
                 </>
               ) : (
                 <>
-                  <Plus size={28} strokeWidth={1} />
+                  <Plus size={28} strokeWidth={1.5} />
                   <span className="text-[11px] tracking-[0.24em] text-mute">DROP IMAGE</span>
                 </>
               )}
@@ -2436,7 +2427,7 @@ export default function MochiApp() {
       <div className="pointer-events-none absolute inset-x-0 bottom-[118px] z-10 flex h-4 justify-center">
         {state.phase === 'wrapping' && (
           <div className="flex items-center gap-3 text-[11px] text-mute">
-            <div className="relative h-px w-32 bg-line">
+            <div className="relative h-[1.5px] w-32 bg-line">
               <div className="absolute inset-y-0 left-0 bg-ink" style={{ width: `${state.cover * 100}%` }} />
             </div>
             <span className="tabular-nums">덮음 <b className="font-bold text-ink">{Math.round(state.cover * 100)}%</b></span>
@@ -2444,7 +2435,7 @@ export default function MochiApp() {
         )}
         {state.phase === 'shaping' && (
           <div className="flex items-center gap-3 text-[11px] text-mute">
-            <div className="relative h-px w-32 bg-line">
+            <div className="relative h-[1.5px] w-32 bg-line">
               <div className="absolute inset-y-0 left-0 bg-ink" style={{ width: `${state.roll * 100}%` }} />
             </div>
             <span className="w-8 tabular-nums">{Math.round(state.roll * 100)}%</span>
@@ -2467,15 +2458,15 @@ export default function MochiApp() {
               <button
                 type="button"
                 onClick={() => void processPhoto(async () => makeSamplePhoto())}
-                className="mb-3 self-center text-[12px] text-mute underline decoration-line underline-offset-4 hover:text-ink"
+                className="mb-3 self-center text-[12px] text-mute underline decoration-line decoration-[1.5px] underline-offset-4 hover:text-ink"
               >
                 샘플 이미지로 시작
               </button>
               <div className="flex gap-2">
-                <LineButton onClick={() => cameraRef.current?.click()} icon={<Camera size={16} strokeWidth={1.25} />}>
+                <LineButton onClick={() => cameraRef.current?.click()} icon={<Camera size={16} strokeWidth={1.5} />}>
                   촬영
                 </LineButton>
-                <LineButton primary grow onClick={() => fileRef.current?.click()} icon={<Plus size={16} strokeWidth={1.25} />}>
+                <LineButton primary grow onClick={() => fileRef.current?.click()} icon={<Plus size={16} strokeWidth={1.5} />}>
                   사진 첨부
                 </LineButton>
               </div>
@@ -2485,11 +2476,11 @@ export default function MochiApp() {
           {state.phase === 'filling' && (
             <BottomBar key="filling">
               <div className="flex gap-2">
-                <LineButton onClick={reset} icon={<RotateCcw size={15} strokeWidth={1.25} />} label="다른 사진" />
+                <LineButton onClick={reset} icon={<RotateCcw size={15} strokeWidth={1.5} />} label="다른 사진" />
                 {state.alt && (
                   <LineButton
                     onClick={() => dispatch({ type: 'TOGGLE_CUTOUT' })}
-                    icon={<Scissors size={15} strokeWidth={1.25} />}
+                    icon={<Scissors size={15} strokeWidth={1.5} />}
                     active={state.subject?.cut}
                   >
                     배경 제거
@@ -2499,7 +2490,7 @@ export default function MochiApp() {
                   primary
                   grow
                   onClick={() => dispatch({ type: 'START_COAT' })}
-                  icon={<ArrowRight size={16} strokeWidth={1.25} />}
+                  icon={<ArrowRight size={16} strokeWidth={1.5} />}
                   iconRight
                 >
                   앙금 입히기
@@ -2510,7 +2501,7 @@ export default function MochiApp() {
 
           {state.phase === 'coating' && (
             <BottomBar key="coating">
-              <div className="mb-2 flex rounded-full border border-line bg-white p-1">
+              <div className="mb-2 flex rounded-full border-[1.5px] border-line bg-white p-1">
                 {(['red', 'white'] as const).map((a) => (
                   <button
                     key={a}
@@ -2526,7 +2517,7 @@ export default function MochiApp() {
                       state.anko === a ? 'bg-ink font-semibold text-white' : 'text-mute hover:text-ink'
                     }`}
                   >
-                    <span className="h-3 w-3 rounded-full border border-white/40" style={{ background: ANKO_STYLE[a].swatch }} />
+                    <span className="h-3 w-3 rounded-full border-[1.5px] border-white/40" style={{ background: ANKO_STYLE[a].swatch }} />
                     {ANKO_STYLE[a].label}
                   </button>
                 ))}
@@ -2534,7 +2525,7 @@ export default function MochiApp() {
               <LineButton
                 primary
                 onClick={() => dispatch({ type: 'START_WRAP' })}
-                icon={<ArrowRight size={16} strokeWidth={1.25} />}
+                icon={<ArrowRight size={16} strokeWidth={1.5} />}
                 iconRight
               >
                 떡 피로 감싸기
@@ -2544,11 +2535,11 @@ export default function MochiApp() {
 
           {state.phase === 'play' && (
             <BottomBar key="play">
-              <div className="flex rounded-full border border-line bg-white p-1">
+              <div className="flex rounded-full border-[1.5px] border-line bg-white p-1">
                 {(
                   [
-                    { m: 'squish', label: '늘리기', icon: <Hand size={16} strokeWidth={1.25} /> },
-                    { m: 'bite', label: '베어물기', icon: <Utensils size={16} strokeWidth={1.25} /> },
+                    { m: 'squish', label: '늘리기', icon: <Hand size={16} strokeWidth={1.5} /> },
+                    { m: 'bite', label: '베어물기', icon: <Utensils size={16} strokeWidth={1.5} /> },
                   ] as const
                 ).map(({ m, label, icon }) => (
                   <button
@@ -2590,13 +2581,13 @@ export default function MochiApp() {
             <img
               src={state.result}
               alt="완식 결과"
-              className="mt-6 max-h-[42vh] w-[64vw] max-w-[300px] border border-line object-contain"
+              className="mt-6 max-h-[42vh] w-[64vw] max-w-[300px] border-[1.5px] border-line object-contain"
             />
             <a
               href="https://bit.ly/gemhanip-insta"
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-6 flex h-12 w-full max-w-md items-center justify-center gap-2 rounded-full border border-ink bg-white px-5 text-[14px] font-semibold text-ink transition-colors hover:bg-ink hover:text-white"
+              className="mt-6 flex h-12 w-full max-w-md items-center justify-center gap-2 rounded-full border-[1.5px] border-ink bg-white px-5 text-[14px] font-semibold text-ink transition-colors hover:bg-ink hover:text-white"
             >
               gemini 혜택으로 찹쌀떡 더 말랑하게 만들기
               <ArrowUpRight size={16} strokeWidth={1.5} />
@@ -2604,13 +2595,13 @@ export default function MochiApp() {
             <p className="mt-2 text-center text-[11px] text-mute">gemini Argon으로 나만의 찹쌀떡 사이트를 만들어보세요</p>
             <div className="fixed inset-x-0 bottom-0 flex justify-center px-5 pb-[max(env(safe-area-inset-bottom),20px)]">
               <div className="flex w-full max-w-md gap-2">
-                <LineButton onClick={reset} icon={<RotateCcw size={15} strokeWidth={1.25} />}>
+                <LineButton onClick={reset} icon={<RotateCcw size={15} strokeWidth={1.5} />}>
                   다시 만들기
                 </LineButton>
-                <LineButton primary grow onClick={saveResult} icon={<Download size={16} strokeWidth={1.25} />}>
+                <LineButton primary grow onClick={saveResult} icon={<Download size={16} strokeWidth={1.5} />}>
                   이미지 저장
                 </LineButton>
-                {canShare && <LineButton onClick={shareResult} icon={<Share2 size={15} strokeWidth={1.25} />} label="공유" />}
+                {canShare && <LineButton onClick={shareResult} icon={<Share2 size={15} strokeWidth={1.5} />} label="공유" />}
               </div>
             </div>
           </motion.div>
@@ -2621,7 +2612,7 @@ export default function MochiApp() {
       <AnimatePresence>
         {toast && (
           <motion.div
-            className="fixed left-1/2 top-[max(env(safe-area-inset-top),18px)] z-[60] mt-12 -translate-x-1/2 whitespace-nowrap border border-line bg-white px-4 py-2 text-[12px] text-ink"
+            className="fixed left-1/2 top-[max(env(safe-area-inset-top),18px)] z-[60] mt-12 -translate-x-1/2 whitespace-nowrap border-[1.5px] border-line bg-white px-4 py-2 text-[12px] text-ink"
             initial={{ opacity: 0, y: -6 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -6 }}
@@ -2702,7 +2693,7 @@ function LineButton({
       title={label}
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
-      className={`pointer-events-auto flex h-12 items-center justify-center gap-2 rounded-full border text-[14px] transition-colors ${
+      className={`pointer-events-auto flex h-12 items-center justify-center gap-2 rounded-full border-[1.5px] text-[14px] transition-colors ${
         iconOnly ? 'w-12 shrink-0' : 'px-5'
       } ${grow ? 'flex-1' : 'shrink-0'} ${
         primary
